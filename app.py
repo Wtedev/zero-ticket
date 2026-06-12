@@ -6,6 +6,10 @@ from src.agents.privacy_filtering_agent import (
     run_regex_privacy_filtering,
 )
 
+from src.agents.classification_agent import (
+    run_classification_agent,
+    run_rule_based_classification,
+)
 
 st.set_page_config(
     page_title="Zero Ticket AI Agent",
@@ -14,7 +18,7 @@ st.set_page_config(
 )
 
 
-st.title("🎫 Zero Ticket AI Agent")
+st.title(" Zero Ticket AI Agent")
 
 st.caption(
     "Zero Ticket لا يصنف التذاكر فقط، بل يحول صوت المستفيد من تذاكر متفرقة "
@@ -170,7 +174,118 @@ if st.button(
 
 if "output_df" in st.session_state:
     st.divider()
+
+    st.subheader("Classification Agent")
+
+    st.write(
+        "هذه المرحلة تحلل التذاكر الصالحة فقط، وتحدد نوع المشكلة، مرحلة رحلة المستفيد، ونوع الحل المناسب."
+    )
+
+    use_llm_classification = st.checkbox(
+        "استخدام LLM Classification",
+        value=True,
+        key="use_llm_classification",
+        help="يفضل تفعيله لنتائج أدق. للتجربة السريعة استخدمي عدد صفوف قليل.",
+    )
+
+    privacy_df = st.session_state["output_df"].copy()
+
+    valid_df = privacy_df[
+        privacy_df["is_valid_ticket"].astype(str).str.lower().isin(["true", "1"])
+    ].copy()
+
+    if len(valid_df) == 0:
+        st.warning("لا توجد تذاكر صالحة للتصنيف بعد الفلترة.")
+    else:
+        max_classification_rows = st.number_input(
+            "عدد التذاكر التي تريدين تصنيفها الآن",
+            min_value=1,
+            max_value=len(valid_df),
+            value=min(20, len(valid_df)),
+            step=5,
+            key="max_classification_rows",
+        )
+
+        if st.button(
+            "تشغيل Classification Agent",
+            key="run_classification_agent_button",
+        ):
+            working_df = valid_df.head(max_classification_rows).copy()
+
+            classified_rows = []
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+
+            with st.spinner("جاري تشغيل Classification Agent..."):
+                for counter, (_, row) in enumerate(working_df.iterrows(), start=1):
+                    status_text.write(
+                        f"جاري تصنيف التذكرة رقم {counter} من {len(working_df)}"
+                    )
+
+                    masked_text = row["masked_text"]
+
+                    if use_llm_classification:
+                        classification_output = run_classification_agent(masked_text)
+                    else:
+                        classification_output = run_rule_based_classification(masked_text)
+
+                    classified_rows.append({
+                        **row.to_dict(),
+                        "problem_category": classification_output.get("problem_category", ""),
+                        "journey_stage": classification_output.get("journey_stage", ""),
+                        "solution_type": "، ".join(classification_output.get("solution_type", [])),
+                        "priority": classification_output.get("priority", ""),
+                        "owner_team": classification_output.get("owner_team", ""),
+                        "confidence_score": classification_output.get("confidence_score", 0),
+                    })
+
+                    progress_bar.progress(counter / len(working_df))
+
+            classified_df = pd.DataFrame(classified_rows)
+            st.session_state["classified_df"] = classified_df
+
+            st.success("تم تشغيل Classification Agent بنجاح.")
+
+            st.subheader("Classification Output Table")
+            st.dataframe(classified_df, use_container_width=True)
+
+            csv = classified_df.to_csv(index=False).encode("utf-8-sig")
+
+            st.download_button(
+                label="تحميل نتائج التصنيف CSV",
+                data=csv,
+                file_name="zero_ticket_classification_output.csv",
+                mime="text/csv",
+                key="download_classification_output",
+            )
+
+
+if "classified_df" in st.session_state:
+    st.divider()
+
+    st.subheader("ملخص سريع للتصنيف")
+
+    classified_df = st.session_state["classified_df"]
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.metric("عدد التذاكر المصنفة", len(classified_df))
+
+    with col2:
+        st.metric("عدد تصنيفات المشاكل", classified_df["problem_category"].nunique())
+
+    with col3:
+        high_priority_count = (classified_df["priority"] == "high").sum()
+        st.metric("الأولوية العالية", int(high_priority_count))
+
+    st.subheader("توزيع أنواع المشاكل")
+    st.bar_chart(classified_df["problem_category"].value_counts())
+
+    st.subheader("توزيع مراحل رحلة المستفيد")
+    st.bar_chart(classified_df["journey_stage"].value_counts())
+
     st.subheader("المرحلة التالية")
     st.write(
-        "بعد هذه الخطوة سنضيف Classification Agent لتصنيف المشكلة، مرحلة رحلة المستفيد، ونوع الحل المناسب."
+        "بعد التصنيف سنضيف Pattern Discovery Agent لاكتشاف الأنماط المتكررة بين التذاكر المتشابهة."
     )
