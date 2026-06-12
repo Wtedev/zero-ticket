@@ -1,0 +1,10 @@
+streamlit
+pandas
+openpyxl
+python-dotenv
+pydantic
+langchain
+langgraph
+langchain-openai
+scikit-learn
+numpy
